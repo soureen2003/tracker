@@ -2,77 +2,71 @@ const express = require("express");
 const app = express();
 const http = require("http");
 const path = require("path");
-const socketio = require("socket.io");
 
+const socketio = require("socket.io");
 const server = http.createServer(app);
 const io = socketio(server);
 
 app.set("view engine", "ejs");
 app.use(express.static(path.join(__dirname, "public")));
 
-const users = {};
-const drivers = {};
+app.get("/", (req, res) => {
+  res.render("user");
+});
+
+app.get("/driver", (req, res) => {
+  res.render("driver");
+});
+
+let driverSocketId = null;
+let userSocketId = null;
 
 io.on("connection", (socket) => {
-  // User or Driver registers on connect
-  socket.on("register", ({ type }) => {
-    if (type === "user") {
-      users[socket.id] = { id: socket.id };
-      console.log("User connected:", socket.id);
-      socket.emit("registered", { id: socket.id, type });
-    } else if (type === "driver") {
-      drivers[socket.id] = { id: socket.id };
-      console.log("Driver connected:", socket.id);
-      socket.emit("registered", { id: socket.id, type });
-    }
+  console.log(`New client connected: ${socket.id}`);
+
+  // Driver sends location
+  socket.on("driver-location", (data) => {
+    io.emit("driver-location-update", {
+      id: socket.id,
+      ...data,
+    });
   });
 
-  socket.on("send-location", (data) => {
-    // Broadcast location to everyone
-    io.emit("receive-location", { id: socket.id, ...data });
+  // User sends location
+  socket.on("user-location", (data) => {
+    io.emit("user-location-update", {
+      id: socket.id,
+      ...data,
+    });
   });
 
   // User requests ambulance
-  socket.on("request-ambulance", () => {
-    console.log(`User ${socket.id} requested ambulance`);
-    // Find nearest available driver (for demo, just pick any)
-    const driverIds = Object.keys(drivers);
+  socket.on("ambulance-request", (data) => {
+    console.log("Ambulance request received", data);
+    userSocketId = socket.id;
 
-    if (driverIds.length === 0) {
-      socket.emit("no-drivers-available");
-      return;
-    }
-
-    // For simplicity, send to all drivers the request
-    driverIds.forEach((driverId) => {
-      io.to(driverId).emit("ambulance-request", {
-        userId: socket.id,
-        userLocation: users[socket.id], // Optional user info if stored
-      });
+    io.emit("ambulance-request-received", {
+      userSocketId,
+      userLocation: data,
     });
   });
 
   // Driver accepts request
-  socket.on("accept-request", ({ userId }) => {
-    console.log(`Driver ${socket.id} accepted request for user ${userId}`);
+  socket.on("ambulance-accept", (data) => {
+    console.log("Ambulance accepted", data);
+    driverSocketId = socket.id;
 
-    // Notify user that driver accepted
-    io.to(userId).emit("request-accepted", { driverId: socket.id });
+    io.to(userSocketId).emit("ambulance-accepted", data);
+    io.to(driverSocketId).emit("ambulance-accepted", data);
   });
 
   socket.on("disconnect", () => {
-    console.log("Disconnected:", socket.id);
-    delete users[socket.id];
-    delete drivers[socket.id];
+    console.log(`Client disconnected: ${socket.id}`);
     io.emit("user-disconnected", socket.id);
   });
 });
 
-// Routes for user and driver pages
-app.get("/", (req, res) => res.render("user"));
-app.get("/driver", (req, res) => res.render("driver"));
-
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+server.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on port ${PORT}`);
 });

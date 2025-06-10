@@ -1,19 +1,40 @@
 const socket = io();
-socket.emit("register", { type: "driver" });
 
-let myLocation = null;
-let userLocation = null;
-let routingControl = null;
+let driverLatitude = 0;
+let driverLongitude = 0;
+let driverMarker = null;
+let userMarker = null;
+let routePolyline = null;
+let currentUserLocation = null;
 
-// LOCATION UPDATES
+const map = L.map("map").setView([0, 0], 13);
+
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  attribution: "soureen-laha",
+}).addTo(map);
+
 if (navigator.geolocation) {
   navigator.geolocation.watchPosition(
     (position) => {
-      const { latitude, longitude } = position.coords;
-      myLocation = [latitude, longitude];
-      socket.emit("send-location", { latitude, longitude });
-      if (!routingControl) {
-        map.setView(myLocation, 13);
+      driverLatitude = position.coords.latitude;
+      driverLongitude = position.coords.longitude;
+
+      socket.emit("driver-location", {
+        latitude: driverLatitude,
+        longitude: driverLongitude,
+      });
+
+      if (!driverMarker) {
+        driverMarker = L.marker([driverLatitude, driverLongitude], {
+          icon: L.icon({
+            iconUrl: "/image/ambulance.png",
+            iconSize: [40, 40],
+          }),
+        }).addTo(map);
+
+        map.setView([driverLatitude, driverLongitude], 13);
+      } else {
+        driverMarker.setLatLng([driverLatitude, driverLongitude]);
       }
     },
     (error) => {
@@ -27,69 +48,52 @@ if (navigator.geolocation) {
   );
 }
 
-// MAP INIT
-const map = L.map("map").setView([0, 0], 10);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  attribution: "ctrl-alt-elite",
-}).addTo(map);
+socket.on("ambulance-request-received", (data) => {
+  console.log("Ambulance request received", data);
+  currentUserLocation = data.userLocation;
 
-const markers = {};
-
-const ambulanceIcon = L.icon({
-  iconUrl: "/img/ambulance.png",
-  iconSize: [40, 40],
-  iconAnchor: [20, 20],
+  document.getElementById("accept-button").style.display = "block";
 });
 
-function updateUserMarker(latlng) {
-  if (markers["user"]) {
-    markers["user"].setLatLng(latlng);
+document.getElementById("accept-button").addEventListener("click", () => {
+  if (currentUserLocation) {
+    socket.emit("ambulance-accept", {
+      driverLocation: {
+        latitude: driverLatitude,
+        longitude: driverLongitude,
+      },
+      userLocation: currentUserLocation,
+    });
+
+    document.getElementById("accept-button").style.display = "none";
+  }
+});
+
+socket.on("ambulance-accepted", (data) => {
+  const { driverLocation, userLocation } = data;
+
+  if (!userMarker) {
+    userMarker = L.marker([userLocation.latitude, userLocation.longitude], {
+      icon: L.icon({
+        iconUrl: "/image/user.png",
+        iconSize: [30, 30],
+      }),
+    }).addTo(map);
   } else {
-    markers["user"] = L.marker(latlng).addTo(map);
+    userMarker.setLatLng([userLocation.latitude, userLocation.longitude]);
   }
-}
 
-// Receive location updates
-socket.on("receive-location", (data) => {
-  const { id, latitude, longitude } = data;
-
-  if (id === socket.id) return; // skip self
-
-  userLocation = [latitude, longitude];
-  updateUserMarker(userLocation);
-
-  if (myLocation && userLocation) {
-    if (routingControl) {
-      routingControl.setWaypoints([L.latLng(myLocation), L.latLng(userLocation)]);
-    } else {
-      routingControl = L.Routing.control({
-        waypoints: [L.latLng(myLocation), L.latLng(userLocation)],
-        routeWhileDragging: false,
-        addWaypoints: false,
-        draggableWaypoints: false,
-        fitSelectedRoutes: true,
-        show: false,
-      }).addTo(map);
-    }
+  if (routePolyline) {
+    map.removeLayer(routePolyline);
   }
-});
 
-// Handle disconnection
-socket.on("user-disconnected", (id) => {
-  if (markers[id]) {
-    map.removeLayer(markers[id]);
-    delete markers[id];
-  }
-  if (routingControl) {
-    routingControl.remove();
-    routingControl = null;
-  }
-});
+  routePolyline = L.polyline(
+    [
+      [driverLocation.latitude, driverLocation.longitude],
+      [userLocation.latitude, userLocation.longitude],
+    ],
+    { color: "blue", weight: 5 }
+  ).addTo(map);
 
-// Receive ambulance request from server
-socket.on("ambulance-request", ({ userId, userLocation }) => {
-  const accept = confirm(`User requested an ambulance! Accept request?`);
-  if (accept) {
-    socket.emit("accept-request", { userId });
-  }
+  map.fitBounds(routePolyline.getBounds());
 });
