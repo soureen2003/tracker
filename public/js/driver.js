@@ -4,15 +4,17 @@ let driverLatitude = 0;
 let driverLongitude = 0;
 let driverMarker = null;
 let userMarker = null;
-let routePolyline = null;
-let currentUserLocation = null;
+let routeControl = null;
+let pendingRequest = null;
 
+// Initialize map
 const map = L.map("map").setView([0, 0], 13);
 
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-  attribution: "soureen-laha",
+  attribution: "© OpenStreetMap contributors",
 }).addTo(map);
 
+// Track driver location and emit
 if (navigator.geolocation) {
   navigator.geolocation.watchPosition(
     (position) => {
@@ -24,6 +26,7 @@ if (navigator.geolocation) {
         longitude: driverLongitude,
       });
 
+      // Driver marker
       if (!driverMarker) {
         driverMarker = L.marker([driverLatitude, driverLongitude], {
           icon: L.icon({
@@ -31,7 +34,6 @@ if (navigator.geolocation) {
             iconSize: [40, 40],
           }),
         }).addTo(map);
-
         map.setView([driverLatitude, driverLongitude], 13);
       } else {
         driverMarker.setLatLng([driverLatitude, driverLongitude]);
@@ -48,52 +50,68 @@ if (navigator.geolocation) {
   );
 }
 
+// Receive ambulance request
 socket.on("ambulance-request-received", (data) => {
-  console.log("Ambulance request received", data);
-  currentUserLocation = data.userLocation;
+  // If already handling a request, ignore new requests
+  if (pendingRequest) return;
 
-  document.getElementById("accept-button").style.display = "block";
+  pendingRequest = data;
+
+  document.getElementById("accept-request").style.display = "block";
+  alert("New ambulance request received!");
 });
 
-document.getElementById("accept-button").addEventListener("click", () => {
-  if (currentUserLocation) {
+// Handle Accept button
+document.getElementById("accept-request").addEventListener("click", () => {
+  if (pendingRequest) {
     socket.emit("ambulance-accept", {
       driverLocation: {
         latitude: driverLatitude,
         longitude: driverLongitude,
       },
-      userLocation: currentUserLocation,
+      userLocation: pendingRequest.userLocation,
     });
 
-    document.getElementById("accept-button").style.display = "none";
-  }
-});
+    alert("Request accepted! Route will be displayed.");
 
-socket.on("ambulance-accepted", (data) => {
-  const { driverLocation, userLocation } = data;
+    document.getElementById("accept-request").style.display = "none";
 
-  if (!userMarker) {
-    userMarker = L.marker([userLocation.latitude, userLocation.longitude], {
-      icon: L.icon({
-        iconUrl: "/image/user.png",
-        iconSize: [30, 30],
-      }),
+    // Draw route to user
+    if (routeControl) {
+      map.removeControl(routeControl);
+    }
+
+    routeControl = L.Routing.control({
+      waypoints: [
+        L.latLng(driverLatitude, driverLongitude),
+        L.latLng(pendingRequest.userLocation.latitude, pendingRequest.userLocation.longitude),
+      ],
+      routeWhileDragging: false,
+      addWaypoints: false,
+      draggableWaypoints: false,
+      fitSelectedRoutes: true,
+      show: false,
     }).addTo(map);
-  } else {
-    userMarker.setLatLng([userLocation.latitude, userLocation.longitude]);
+
+    // Show user marker
+    if (!userMarker) {
+      userMarker = L.marker(
+        [pendingRequest.userLocation.latitude, pendingRequest.userLocation.longitude],
+        {
+          icon: L.icon({
+            iconUrl: "/image/user.png",
+            iconSize: [30, 30],
+          }),
+        }
+      ).addTo(map);
+    } else {
+      userMarker.setLatLng([
+        pendingRequest.userLocation.latitude,
+        pendingRequest.userLocation.longitude,
+      ]);
+    }
+
+    // Clear pendingRequest so we can handle a future one
+    pendingRequest = null;
   }
-
-  if (routePolyline) {
-    map.removeLayer(routePolyline);
-  }
-
-  routePolyline = L.polyline(
-    [
-      [driverLocation.latitude, driverLocation.longitude],
-      [userLocation.latitude, userLocation.longitude],
-    ],
-    { color: "blue", weight: 5 }
-  ).addTo(map);
-
-  map.fitBounds(routePolyline.getBounds());
 });

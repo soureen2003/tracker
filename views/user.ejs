@@ -1,21 +1,155 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>User - Ambulance Tracker</title>
-  <link rel="stylesheet" href="/css/style.css"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  
   <link
     rel="stylesheet"
-    href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"
+    href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css"
   />
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"
+  />
+  <style>
+    #map {
+      height: 100vh;
+    }
+    #request-ambulance {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 12px 24px;
+      font-size: 16px;
+      background-color: #ff4c4c;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      z-index: 1000;
+    }
+    #request-ambulance:hover {
+      background-color: #e63b3b;
+    }
+  </style>
 </head>
 <body>
-  <button id="request-ambulance">Request Ambulance</button>
   <div id="map"></div>
+  <button id="request-ambulance">Request Ambulance</button>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-  <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
-  <script src="/js/user.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+
+  <script>
+    const socket = io();
+
+    let userLatitude = 0;
+    let userLongitude = 0;
+    let driverMarkers = {}; // Multiple drivers
+    let userMarker = null;
+    let routeControl = null;
+
+    const map = L.map("map").setView([0, 0], 13);
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "© OpenStreetMap contributors",
+    }).addTo(map);
+
+    // Track user location and emit
+    if (navigator.geolocation) {
+      navigator.geolocation.watchPosition(
+        (position) => {
+          userLatitude = position.coords.latitude;
+          userLongitude = position.coords.longitude;
+
+          socket.emit("user-location", {
+            latitude: userLatitude,
+            longitude: userLongitude,
+          });
+
+          if (!userMarker) {
+            userMarker = L.marker([userLatitude, userLongitude], {
+              icon: L.icon({
+                iconUrl: "/image/user.png",
+                iconSize: [30, 30],
+              }),
+            }).addTo(map);
+            map.setView([userLatitude, userLongitude], 13);
+          } else {
+            userMarker.setLatLng([userLatitude, userLongitude]);
+          }
+        },
+        (error) => {
+          console.log(error);
+        },
+        {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 5000,
+        }
+      );
+    }
+
+    // Receive all drivers' locations
+    socket.on("driver-location-update", (drivers) => {
+      // Update or add markers
+      for (const [id, loc] of Object.entries(drivers)) {
+        if (!driverMarkers[id]) {
+          driverMarkers[id] = L.marker([loc.latitude, loc.longitude], {
+            icon: L.icon({
+              iconUrl: "/image/ambulance.png",
+              iconSize: [40, 40],
+            }),
+          }).addTo(map);
+        } else {
+          driverMarkers[id].setLatLng([loc.latitude, loc.longitude]);
+        }
+      }
+
+      // Remove disconnected drivers
+      for (const id in driverMarkers) {
+        if (!drivers[id]) {
+          map.removeLayer(driverMarkers[id]);
+          delete driverMarkers[id];
+        }
+      }
+    });
+
+    // Ambulance accepted → draw route
+    socket.on("ambulance-accepted", (data) => {
+      const { driverLocation, userLocation } = data;
+
+      if (routeControl) {
+        map.removeControl(routeControl);
+      }
+
+      routeControl = L.Routing.control({
+        waypoints: [
+          L.latLng(driverLocation.latitude, driverLocation.longitude),
+          L.latLng(userLocation.latitude, userLocation.longitude),
+        ],
+        routeWhileDragging: false,
+        addWaypoints: false,
+        draggableWaypoints: false,
+        fitSelectedRoutes: true,
+        show: false,
+      }).addTo(map);
+
+      console.log("Route drawn to user");
+    });
+
+    document.getElementById("request-ambulance").addEventListener("click", () => {
+      socket.emit("ambulance-request", {
+        latitude: userLatitude,
+        longitude: userLongitude,
+      });
+
+      alert("Ambulance requested! Please wait for a driver to accept.");
+    });
+  </script>
 </body>
 </html>

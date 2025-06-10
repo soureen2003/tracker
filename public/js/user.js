@@ -2,9 +2,9 @@ const socket = io();
 
 let userLatitude = 0;
 let userLongitude = 0;
-let driverMarker = null;
 let userMarker = null;
-let routePolyline = null;
+let ambulanceMarkers = {};
+let routeControl = null;
 
 // Initialize map
 const map = L.map("map").setView([0, 0], 13);
@@ -25,14 +25,14 @@ if (navigator.geolocation) {
         longitude: userLongitude,
       });
 
-      // Update user marker
+      // Show user marker
       if (!userMarker) {
         userMarker = L.marker([userLatitude, userLongitude], {
           icon: L.icon({
             iconUrl: "/image/user.png",
             iconSize: [30, 30],
           }),
-        }).addTo(map).bindPopup("You are here").openPopup();
+        }).addTo(map);
 
         map.setView([userLatitude, userLongitude], 13);
       } else {
@@ -50,56 +50,73 @@ if (navigator.geolocation) {
   );
 }
 
-socket.on("driver-location-update", (data) => {
-  const { latitude, longitude } = data;
+// Receive all ambulance positions
+socket.on("driver-location-update", (drivers) => {
+  // Update each driver marker
+  Object.keys(drivers).forEach((driverId) => {
+    const { latitude, longitude } = drivers[driverId];
 
-  if (!driverMarker) {
-    driverMarker = L.marker([latitude, longitude], {
-      icon: L.icon({
-        iconUrl: "/image/ambulance.png",
-        iconSize: [40, 40],
-      }),
-    }).addTo(map);
-  } else {
-    driverMarker.setLatLng([latitude, longitude]);
-  }
+    if (!ambulanceMarkers[driverId]) {
+      ambulanceMarkers[driverId] = L.marker([latitude, longitude], {
+        icon: L.icon({
+          iconUrl: "/image/ambulance.png",
+          iconSize: [40, 40],
+        }),
+      }).addTo(map);
+    } else {
+      ambulanceMarkers[driverId].setLatLng([latitude, longitude]);
+    }
+  });
+
+  // Remove ambulance markers for disconnected drivers
+  Object.keys(ambulanceMarkers).forEach((driverId) => {
+    if (!drivers[driverId]) {
+      map.removeLayer(ambulanceMarkers[driverId]);
+      delete ambulanceMarkers[driverId];
+    }
+  });
 });
 
+// When ambulance accepts request → draw route
 socket.on("ambulance-accepted", (data) => {
   const { driverLocation, userLocation } = data;
 
-  // Ensure user marker is shown
+  // Remove old route if exists
+  if (routeControl) {
+    map.removeControl(routeControl);
+  }
+
+  routeControl = L.Routing.control({
+    waypoints: [
+      L.latLng(driverLocation.latitude, driverLocation.longitude),
+      L.latLng(userLocation.latitude, userLocation.longitude),
+    ],
+    routeWhileDragging: false,
+    addWaypoints: false,
+    draggableWaypoints: false,
+    fitSelectedRoutes: true,
+    show: false,
+  }).addTo(map);
+
+  // Ensure user marker is shown at correct place
   if (!userMarker) {
     userMarker = L.marker([userLocation.latitude, userLocation.longitude], {
       icon: L.icon({
         iconUrl: "/image/user.png",
         iconSize: [30, 30],
       }),
-    }).addTo(map).bindPopup("You are here").openPopup();
+    }).addTo(map);
   } else {
     userMarker.setLatLng([userLocation.latitude, userLocation.longitude]);
   }
-
-  // Draw route line
-  if (routePolyline) {
-    map.removeLayer(routePolyline);
-  }
-
-  routePolyline = L.polyline(
-    [
-      [driverLocation.latitude, driverLocation.longitude],
-      [userLocation.latitude, userLocation.longitude],
-    ],
-    { color: "blue", weight: 5 }
-  ).addTo(map);
-
-  map.fitBounds(routePolyline.getBounds());
 });
 
+// User disconnected → clean up if needed
 socket.on("user-disconnected", (id) => {
   console.log(`User disconnected: ${id}`);
 });
 
+// Handle Request Ambulance button
 document.getElementById("request-ambulance").addEventListener("click", () => {
   socket.emit("ambulance-request", {
     latitude: userLatitude,
