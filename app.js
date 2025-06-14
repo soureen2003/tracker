@@ -1,126 +1,236 @@
 const express = require("express");
-const app = express();
 const http = require("http");
 const path = require("path");
+const socketIO = require("socket.io");
+const session = require("express-session");
+const flash = require("connect-flash");
+const mongoose = require("mongoose");
 
-const socketio = require("socket.io");
+require("./db");
+const User = require("./models/userModel");
+const Driver = require("./models/driverModel");
+
+const app = express();
 const server = http.createServer(app);
-const io = socketio(server);
+const io = socketIO(server);
 
 app.set("view engine", "ejs");
 app.use(express.static(path.join(__dirname, "public")));
+app.use(express.urlencoded({ extended: true }));
 
-app.get("/", (req, res) => {
-  res.render("user");
+app.use(session({
+  secret: 'ambulance-secret',
+  resave: false,
+  saveUninitialized: false
+}));
+app.use(flash());
+
+app.use((req, res, next) => {
+  res.locals.success_msg = req.flash("success_msg");
+  res.locals.error_msg = req.flash("error_msg");
+  next();
 });
 
-app.get("/driver", (req, res) => {
-  res.render("driver");
+// Pages
+app.get("/", (req, res) => res.render("home"));
+
+app.get("/user", async (req, res) => {
+  const email = req.query.email;
+  try {
+    const user = await User.findOne({ email });
+    if (!user) {
+      req.flash("error_msg", "User not found");
+      return res.redirect("/user-login");
+    }
+    res.render("user", { user });
+  } catch (err) {
+    console.error("❌ Error loading user view:", err);
+    res.redirect("/user-login");
+  }
 });
 
-// Multiple drivers storage
-let driverSockets = {}; // { socket.id: { latitude, longitude } }
-let userSocketId = null;
-let currentRequest = null; // store current request data
+app.get("/user-login", (req, res) => res.render("userLogin"));
+app.get("/user-signup", (req, res) => res.render("userSignup"));
+
+app.get("/driver", async (req, res) => {
+  if (!req.session.driverId) {
+    req.flash("error_msg", "Please log in first");
+    return res.redirect("/driver-login");
+  }
+
+  try {
+    const driver = await Driver.findById(req.session.driverId);
+    res.render("driver", { driver });
+  } catch (err) {
+    res.render("driver", { driver: null });
+  }
+});
+
+app.get("/driver-login", (req, res) => res.render("driverLogin"));
+app.get("/driver-signup", (req, res) => res.render("driverSignup"));
+
+// Signup & Login Routes
+
+app.post("/user/signup", async (req, res) => {
+  const { name, email, password, phone } = req.body;
+  try {
+    const existing = await User.findOne({ email });
+    if (existing) {
+      req.flash("error_msg", "User already exists");
+      return res.redirect("/user-signup");
+    }
+
+    const newUser = new User({ name, email, password, phone });
+    await newUser.save();
+    req.flash("success_msg", "User registered! Please login.");
+    res.redirect("/user-login");
+  } catch (err) {
+    req.flash("error_msg", "Error during signup");
+    res.redirect("/user-signup");
+  }
+});
+
+app.post("/user/login", async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const user = await User.findOne({ email });
+    if (!user || user.password !== password) {
+      req.flash("error_msg", "Invalid credentials");
+      return res.redirect("/user-login");
+    }
+    res.redirect(`/user?email=${encodeURIComponent(email)}`);
+  } catch (err) {
+    req.flash("error_msg", "Login error");
+    res.redirect("/user-login");
+  }
+});
+
+app.post("/driver/signup", async (req, res) => {
+  const { name, email, password, phone } = req.body;
+  try {
+    const existing = await Driver.findOne({ email });
+    if (existing) {
+      req.flash("error_msg", "Driver already exists");
+      return res.redirect("/driver-signup");
+    }
+
+    const newDriver = new Driver({ name, email, password, phone });
+    await newDriver.save();
+    req.flash("success_msg", "Driver registered! Please login.");
+    res.redirect("/driver-login");
+  } catch (err) {
+    req.flash("error_msg", "Error during signup");
+    res.redirect("/driver-signup");
+  }
+});
+
+app.post("/driver/login", async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    const driver = await Driver.findOne({ email });
+    if (!driver || driver.password !== password) {
+      req.flash("error_msg", "Invalid credentials");
+      return res.redirect("/driver-login");
+    }
+    req.session.driverId = driver._id;
+    res.redirect("/driver");
+  } catch (err) {
+    req.flash("error_msg", "Login error");
+    res.redirect("/driver-login");
+  }
+});
+
+// ========== SOCKET.IO ==========
+const drivers = {};
+const driverLocations = {};
+const userRequests = {};
+const driverSocketToId = {};
 
 io.on("connection", (socket) => {
-  console.log(`New client connected: ${socket.id}`);
+  console.log("✅ Client connected:", socket.id);
 
-  // Driver sends location
-  socket.on("driver-location", (data) => {
-    driverSockets[socket.id] = data;
-
-    // Broadcast all drivers to all users
-    io.emit("driver-location-update", driverSockets);
+  socket.on("driver-register", (driverId) => {
+    driverSocketToId[socket.id] = driverId;
+    drivers[socket.id] = socket;
   });
 
-  // User sends location
-  socket.on("user-location", (data) => {
-    userSocketId = socket.id;
-
-    // Emit to all drivers — live user location
-    io.emit("user-location-update", {
-      id: socket.id,
-      ...data,
-    });
-  });
-
-  // User requests ambulance
-  socket.on("ambulance-request", (data) => {
-    console.log("Ambulance request received", data);
-
-    userSocketId = socket.id;
-    currentRequest = {
-      userSocketId,
-      userLocation: data,
-      assignedDriverSocketId: null, // no driver assigned yet
-    };
-
-    // Emit to all drivers — new request
-    io.emit("ambulance-request-received", {
-      userSocketId,
-      userLocation: data,
-    });
-  });
-
-  // Driver accepts request
-  socket.on("ambulance-accept", (data) => {
-    console.log(`Driver ${socket.id} accepted request`);
-
-    // Safety check
-    if (!currentRequest) {
-      console.log("No active request.");
-      return;
+  socket.on("user-location", async (location) => {
+    userRequests[socket.id] = location;
+    try {
+      await User.findOneAndUpdate({ email: location.email }, { socketId: socket.id });
+    } catch (err) {
+      console.error("⚠️ Error saving user socketId:", err);
     }
+    io.emit("driver-location-update", driverLocations);
+  });
 
-    if (currentRequest.assignedDriverSocketId) {
-      console.log("Request already accepted by another driver.");
-      return;
+  socket.on("driver-location", (location) => {
+    driverLocations[socket.id] = location;
+    drivers[socket.id] = socket;
+    io.emit("driver-location-update", driverLocations);
+  });
+
+  socket.on("ambulance-request", async (location) => {
+    userRequests[socket.id] = location;
+    try {
+      const user = await User.findOne({ socketId: socket.id });
+      if (!user) return;
+
+      for (const driverSocketId in drivers) {
+        drivers[driverSocketId].emit("ambulance-request-received", {
+          userSocketId: socket.id,
+          userLocation: location,
+          userName: user.name,
+          userPhone: user.phone
+        });
+      }
+    } catch (err) {
+      console.error("❌ Error fetching user in ambulance-request:", err);
     }
+  });
 
-    // Assign driver
-    currentRequest.assignedDriverSocketId = socket.id;
+  socket.on("ambulance-accept", async (data) => {
+    const { driverLocation, userLocation, userSocketId } = data;
+    const driverId = driverSocketToId[socket.id];
+    if (!driverId) return;
 
-    // Send to user and driver
-    io.to(userSocketId).emit("ambulance-accepted", data);
-    io.to(socket.id).emit("ambulance-accepted", data);
+    try {
+      const driver = await Driver.findById(driverId);
+      const user = await User.findOne({ socketId: userSocketId });
+      if (!driver || !user) return;
 
-    console.log(`Request assigned to driver ${socket.id}`);
+      // Send driver info to user
+      io.to(userSocketId).emit("ambulance-accepted", {
+        driverLocation,
+        userLocation,
+        driverName: driver.name,
+        driverPhone: driver.phone
+      });
+
+      // Send user info to driver
+      socket.emit("user-info", {
+        userName: user.name,
+        userPhone: user.phone,
+        userLocation
+      });
+
+    } catch (err) {
+      console.error("❌ Error in ambulance-accept:", err);
+    }
   });
 
   socket.on("disconnect", () => {
-    console.log(`Client disconnected: ${socket.id}`);
-
-    // Remove driver if exists
-    if (driverSockets[socket.id]) {
-      delete driverSockets[socket.id];
-
-      // Update driver list to users
-      io.emit("driver-location-update", driverSockets);
-    }
-
-    // If user disconnects → reset request
-    if (socket.id === userSocketId) {
-      console.log(`User ${socket.id} disconnected — resetting request.`);
-      userSocketId = null;
-      currentRequest = null;
-
-      // Notify drivers
-      io.emit("user-disconnected", socket.id);
-    }
-
-    // If driver assigned → reset request
-    if (currentRequest && socket.id === currentRequest.assignedDriverSocketId) {
-      console.log(`Assigned driver ${socket.id} disconnected — resetting request.`);
-      currentRequest = null;
-
-      // Notify drivers
-      io.emit("user-disconnected", "assigned-driver-disconnected");
-    }
+    console.log("❌ Client disconnected:", socket.id);
+    delete drivers[socket.id];
+    delete driverLocations[socket.id];
+    delete userRequests[socket.id];
+    delete driverSocketToId[socket.id];
+    io.emit("driver-location-update", driverLocations);
   });
 });
 
+// ========== START SERVER ==========
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, "0.0.0.0", () => {
-  console.log(`Server running on port ${PORT}`);
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
 });

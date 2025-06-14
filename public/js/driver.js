@@ -10,6 +10,21 @@ let pendingRequest = null;
 // Initialize map
 const map = L.map("map").setView([0, 0], 13);
 
+// Register driver after page load
+window.addEventListener("load", () => {
+  fetch("/driver-info")
+    .then((res) => res.json())
+    .then((data) => {
+      if (data.driverId) {
+        socket.emit("driver-register", data.driverId);
+      }
+    })
+    .catch((err) => {
+      console.error("Failed to register driver:", err);
+    });
+});
+
+
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: "© OpenStreetMap contributors",
 }).addTo(map);
@@ -70,6 +85,7 @@ document.getElementById("accept-request").addEventListener("click", () => {
         longitude: driverLongitude,
       },
       userLocation: pendingRequest.userLocation,
+      userSocketId: pendingRequest.userSocketId,
     });
 
     alert("Request accepted! Route will be displayed.");

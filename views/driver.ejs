@@ -4,36 +4,15 @@
   <title>Driver - Ambulance Tracker</title>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css"
-  />
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css"
-  />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css" />
   <style>
-    #map {
-      height: 100vh;
-    }
+    #map { height: 100vh; }
     #accept-request {
-      position: absolute;
-      bottom: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      padding: 12px 24px;
-      font-size: 16px;
-      background-color: #4CAF50;
-      color: white;
-      border: none;
-      border-radius: 5px;
-      cursor: pointer;
-      display: none;
-      z-index: 1000;
-    }
-    #accept-request:hover {
-      background-color: #45a049;
+      position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+      padding: 12px 24px; font-size: 16px;
+      background-color: #4CAF50; color: white;
+      border: none; border-radius: 5px; cursor: pointer; z-index: 1000; display: none;
     }
   </style>
 </head>
@@ -42,66 +21,53 @@
   <button id="accept-request">Accept Request</button>
 
   <script src="/socket.io/socket.io.js"></script>
-  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
-  <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
 
   <script>
     const socket = io();
+    const driverId = "<%= driver._id %>"; // Injected from server
+
+    socket.emit("driver-register", driverId);
 
     let driverLatitude = 0;
     let driverLongitude = 0;
     let driverMarker = null;
-    let userMarker = null;
     let routeControl = null;
     let pendingRequest = null;
 
     const map = L.map("map").setView([0, 0], 13);
-
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "© OpenStreetMap contributors",
+      attribution: "© OpenStreetMap contributors"
     }).addTo(map);
 
-    // Track driver location and emit
-    if (navigator.geolocation) {
-      navigator.geolocation.watchPosition(
-        (position) => {
-          driverLatitude = position.coords.latitude;
-          driverLongitude = position.coords.longitude;
+    navigator.geolocation.watchPosition((position) => {
+      driverLatitude = position.coords.latitude;
+      driverLongitude = position.coords.longitude;
 
-          socket.emit("driver-location", {
-            latitude: driverLatitude,
-            longitude: driverLongitude,
-          });
+      socket.emit("driver-location", {
+        latitude: driverLatitude,
+        longitude: driverLongitude,
+      });
 
-          if (!driverMarker) {
-            driverMarker = L.marker([driverLatitude, driverLongitude], {
-              icon: L.icon({
-                iconUrl: "/image/ambulance.png",
-                iconSize: [40, 40],
-              }),
-            }).addTo(map);
-            map.setView([driverLatitude, driverLongitude], 13);
-          } else {
-            driverMarker.setLatLng([driverLatitude, driverLongitude]);
-          }
-        },
-        (error) => {
-          console.log(error);
-        },
-        {
-          enableHighAccuracy: true,
-          maximumAge: 0,
-          timeout: 5000,
-        }
-      );
-    }
+      if (!driverMarker) {
+        driverMarker = L.marker([driverLatitude, driverLongitude], {
+          icon: L.icon({ iconUrl: "/image/ambulance.png", iconSize: [40, 40] }),
+        }).addTo(map);
+        map.setView([driverLatitude, driverLongitude], 13);
+      } else {
+        driverMarker.setLatLng([driverLatitude, driverLongitude]);
+      }
+    });
 
+    // 🚨 Receive ambulance request
     socket.on("ambulance-request-received", (data) => {
+      console.log("Received ambulance request from user:", data);
       pendingRequest = data;
-
       document.getElementById("accept-request").style.display = "block";
     });
 
+    // ✅ Accept request (without prompt)
     document.getElementById("accept-request").addEventListener("click", () => {
       if (pendingRequest) {
         socket.emit("ambulance-accept", {
@@ -109,20 +75,11 @@
             latitude: driverLatitude,
             longitude: driverLongitude,
           },
-          userLocation: {
-            latitude: pendingRequest.userLocation.latitude,
-            longitude: pendingRequest.userLocation.longitude,
-          },
+          userLocation: pendingRequest.userLocation,
+          userSocketId: pendingRequest.userSocketId
         });
 
-        alert("Request accepted! Route will be displayed.");
-
-        document.getElementById("accept-request").style.display = "none";
-
-        // Draw route to user
-        if (routeControl) {
-          map.removeControl(routeControl);
-        }
+        if (routeControl) map.removeControl(routeControl);
 
         routeControl = L.Routing.control({
           waypoints: [
@@ -136,42 +93,13 @@
           show: false,
         }).addTo(map);
 
-        // Add user marker
-        if (!userMarker) {
-          userMarker = L.marker(
-            [pendingRequest.userLocation.latitude, pendingRequest.userLocation.longitude],
-            {
-              icon: L.icon({
-                iconUrl: "/image/user.png",
-                iconSize: [30, 30],
-              }),
-            }
-          ).addTo(map);
-        } else {
-          userMarker.setLatLng([
-            pendingRequest.userLocation.latitude,
-            pendingRequest.userLocation.longitude,
-          ]);
-        }
+        document.getElementById("accept-request").style.display = "none";
       }
     });
 
-    // Reset request if user disconnects
-    socket.on("user-disconnected", (msg) => {
-      console.log("User disconnected:", msg);
-
-      pendingRequest = null;
-      document.getElementById("accept-request").style.display = "none";
-
-      if (routeControl) {
-        map.removeControl(routeControl);
-        routeControl = null;
-      }
-
-      if (userMarker) {
-        map.removeLayer(userMarker);
-        userMarker = null;
-      }
+    // ✅ Receive user info after acceptance
+    socket.on("user-info", (userInfo) => {
+      alert(`User Name: ${userInfo.userName}\nPhone: ${userInfo.userPhone}`);
     });
   </script>
 </body>
