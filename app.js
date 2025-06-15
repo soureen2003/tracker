@@ -171,12 +171,36 @@ io.on("connection", (socket) => {
   });
 
   socket.on("ambulance-request", async (location) => {
-    userRequests[socket.id] = location;
-    try {
-      const user = await User.findOne({ socketId: socket.id });
-      if (!user) return;
+  userRequests[socket.id] = location;
+  try {
+    const user = await User.findOne({ socketId: socket.id });
+    if (!user) return;
 
-      for (const driverSocketId in drivers) {
+    // === NEW PROXIMITY FILTERING START ===
+    const haversineDistance = (loc1, loc2) => {
+      const toRad = (x) => (x * Math.PI) / 180;
+      const R = 6371;
+      const dLat = toRad(loc2.latitude - loc1.latitude);
+      const dLon = toRad(loc2.longitude - loc1.longitude);
+      const lat1 = toRad(loc1.latitude);
+      const lat2 = toRad(loc2.latitude);
+      const a =
+        Math.sin(dLat / 2) ** 2 +
+        Math.sin(dLon / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    };
+
+    const MAX_DISTANCE_KM = 500;
+
+    for (const driverSocketId in drivers) {
+      const driverLocation = driverLocations[driverSocketId];
+      if (!driverLocation) continue;
+
+      const distance = haversineDistance(location, driverLocation);
+      console.log(`Driver ${driverSocketId} is ${distance.toFixed(2)} km away`);
+
+      if (distance <= MAX_DISTANCE_KM) {
         drivers[driverSocketId].emit("ambulance-request-received", {
           userSocketId: socket.id,
           userLocation: location,
@@ -184,10 +208,14 @@ io.on("connection", (socket) => {
           userPhone: user.phone
         });
       }
-    } catch (err) {
-      console.error("❌ Error fetching user in ambulance-request:", err);
     }
-  });
+    // === NEW PROXIMITY FILTERING END ===
+
+  } catch (err) {
+    console.error("❌ Error fetching user in ambulance-request:", err);
+  }
+});
+
 
   socket.on("ambulance-accept", async (data) => {
     const { driverLocation, userLocation, userSocketId } = data;
