@@ -6,14 +6,13 @@ let userMarker = null;
 let ambulanceMarkers = {};
 let routeControl = null;
 
-// Initialize map
 const map = L.map("map").setView([0, 0], 13);
 
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   attribution: "© OpenStreetMap contributors",
 }).addTo(map);
 
-// Track user location and emit
+// Track user location
 if (navigator.geolocation) {
   navigator.geolocation.watchPosition(
     (position) => {
@@ -25,7 +24,6 @@ if (navigator.geolocation) {
         longitude: userLongitude,
       });
 
-      // Show user marker
       if (!userMarker) {
         userMarker = L.marker([userLatitude, userLongitude], {
           icon: L.icon({
@@ -33,15 +31,12 @@ if (navigator.geolocation) {
             iconSize: [30, 30],
           }),
         }).addTo(map);
-
         map.setView([userLatitude, userLongitude], 13);
       } else {
         userMarker.setLatLng([userLatitude, userLongitude]);
       }
     },
-    (error) => {
-      console.log(error);
-    },
+    (error) => console.log(error),
     {
       enableHighAccuracy: true,
       maximumAge: 0,
@@ -50,9 +45,8 @@ if (navigator.geolocation) {
   );
 }
 
-// Receive all ambulance positions
+// Update driver positions
 socket.on("driver-location-update", (drivers) => {
-  // Update each driver marker
   Object.keys(drivers).forEach((driverId) => {
     const { latitude, longitude } = drivers[driverId];
 
@@ -68,7 +62,6 @@ socket.on("driver-location-update", (drivers) => {
     }
   });
 
-  // Remove ambulance markers for disconnected drivers
   Object.keys(ambulanceMarkers).forEach((driverId) => {
     if (!drivers[driverId]) {
       map.removeLayer(ambulanceMarkers[driverId]);
@@ -77,14 +70,12 @@ socket.on("driver-location-update", (drivers) => {
   });
 });
 
-// When ambulance accepts request → draw route
+// On ambulance acceptance
 socket.on("ambulance-accepted", (data) => {
-  const { driverLocation, userLocation } = data;
+  const { driverLocation, userLocation, driverName, driverPhone } = data;
 
-  // Remove old route if exists
-  if (routeControl) {
-    map.removeControl(routeControl);
-  }
+  // Remove old route
+  if (routeControl) map.removeControl(routeControl);
 
   routeControl = L.Routing.control({
     waypoints: [
@@ -98,7 +89,6 @@ socket.on("ambulance-accepted", (data) => {
     show: false,
   }).addTo(map);
 
-  // Ensure user marker is shown at correct place
   if (!userMarker) {
     userMarker = L.marker([userLocation.latitude, userLocation.longitude], {
       icon: L.icon({
@@ -109,19 +99,42 @@ socket.on("ambulance-accepted", (data) => {
   } else {
     userMarker.setLatLng([userLocation.latitude, userLocation.longitude]);
   }
+
+  const btn = document.getElementById("request-ambulance");
+  btn.disabled = false;
+  btn.classList.remove("loading");
+
+  document.getElementById("no-driver-msg").style.display = "none";
+
+  alert(`🚑 Ambulance Accepted!\n👨‍✈️ Driver: ${driverName}\n📞 Phone: ${driverPhone}`);
 });
 
-// User disconnected → clean up if needed
+// If user disconnects
 socket.on("user-disconnected", (id) => {
   console.log(`User disconnected: ${id}`);
 });
 
 // Handle Request Ambulance button
 document.getElementById("request-ambulance").addEventListener("click", () => {
+  const btn = document.getElementById("request-ambulance");
+  const msgBox = document.getElementById("no-driver-msg");
+
+  // Visual loading
+  btn.classList.add("loading");
+  btn.disabled = true;
+  msgBox.style.display = "none";
+
   socket.emit("ambulance-request", {
     latitude: userLatitude,
     longitude: userLongitude,
   });
 
-  alert("Ambulance requested! Please wait for driver to accept.");
+  // Timeout fallback if no response
+  setTimeout(() => {
+    if (!routeControl) {
+      msgBox.style.display = "block";
+      btn.classList.remove("loading");
+      btn.disabled = false;
+    }
+  }, 15000);
 });

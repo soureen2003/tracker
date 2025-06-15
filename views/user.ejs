@@ -8,21 +8,63 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.css" />
   <style>
     #map { height: 100vh; }
+
     #request-ambulance {
-      position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-      padding: 12px 24px; font-size: 16px;
-      background-color: #ff4c4c; color: white;
-      border: none; border-radius: 5px; cursor: pointer; z-index: 1000;
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 12px 24px;
+      font-size: 16px;
+      background-color: #ff4c4c;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      z-index: 1000;
+      transition: background-color 0.3s ease;
+    }
+
+    #request-ambulance:hover {
+      background-color: #e04343;
+    }
+
+    #request-ambulance.loading::after {
+      content: '...';
+      animation: dots 1s steps(3, end) infinite;
+      display: inline-block;
+      margin-left: 6px;
+    }
+
+    @keyframes dots {
+      0%, 20% { content: ''; }
+      40% { content: '.'; }
+      60% { content: '..'; }
+      80%, 100% { content: '...'; }
+    }
+
+    #no-driver-msg {
+      position: absolute;
+      bottom: 70px;
+      left: 50%;
+      transform: translateX(-50%);
+      background-color: #ffc107;
+      color: black;
+      padding: 10px 20px;
+      border-radius: 6px;
+      font-weight: bold;
+      z-index: 1001;
+      display: none;
     }
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <div id="no-driver-msg">❌ No ambulance found nearby. Please try again later.</div>
   <button id="request-ambulance">Request Ambulance</button>
 
-  <!-- Pass user email from EJS to JS -->
   <script>
-    const userEmail = "<%= user.email %>";
+    const userEmail = "<%= typeof user !== 'undefined' ? user.email : '' %>";
   </script>
 
   <script src="/socket.io/socket.io.js"></script>
@@ -38,14 +80,13 @@
 
     const map = L.map("map").setView([0, 0], 13);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "© OpenStreetMap contributors"
+      attribution: "ctrl-alt-elite contributors"
     }).addTo(map);
 
     navigator.geolocation.watchPosition((position) => {
       userLatitude = position.coords.latitude;
       userLongitude = position.coords.longitude;
 
-      // Send location with email for backend to store socketId
       socket.emit("user-location", {
         latitude: userLatitude,
         longitude: userLongitude,
@@ -62,7 +103,6 @@
       }
     });
 
-    // Show available ambulances
     socket.on("driver-location-update", (drivers) => {
       for (const id in driverMarkers) {
         if (!drivers[id]) {
@@ -83,25 +123,18 @@
       }
     });
 
-    // When a driver accepts the request
     socket.on("ambulance-accepted", ({ driverLocation, userLocation, driverName, driverPhone }) => {
-      // Clean up old route
-      if (routeControl) {
-        map.removeControl(routeControl);
-      }
+      if (routeControl) map.removeControl(routeControl);
 
-      // Remove all old ambulance markers
       for (const id in driverMarkers) {
         map.removeLayer(driverMarkers[id]);
         delete driverMarkers[id];
       }
 
-      // Show accepted driver's marker
-      const acceptedDriverMarker = L.marker([driverLocation.latitude, driverLocation.longitude], {
+      L.marker([driverLocation.latitude, driverLocation.longitude], {
         icon: L.icon({ iconUrl: "/image/ambulance.png", iconSize: [40, 40] }),
       }).addTo(map);
 
-      // Draw route from driver to user
       routeControl = L.Routing.control({
         waypoints: [
           L.latLng(driverLocation.latitude, driverLocation.longitude),
@@ -114,25 +147,40 @@
         show: false,
       }).addTo(map);
 
-      // Show driver details
+      document.getElementById("no-driver-msg").style.display = "none";
+      requestBtn.classList.remove("loading");
+      requestBtn.disabled = false;
+
       alert(`🚑 Ambulance Accepted!\n👨‍✈️ Driver: ${driverName}\n📞 Phone: ${driverPhone}`);
     });
 
-    // Request ambulance
-    document.getElementById("request-ambulance").addEventListener("click", () => {
-      // Only clean up route, not ambulance markers
+    const requestBtn = document.getElementById("request-ambulance");
+
+    requestBtn.addEventListener("click", () => {
       if (routeControl) {
         map.removeControl(routeControl);
         routeControl = null;
       }
 
+      document.getElementById("no-driver-msg").style.display = "none";
+      requestBtn.classList.add("loading");
+      requestBtn.disabled = true;
+
       socket.emit("ambulance-request", {
         latitude: userLatitude,
         longitude: userLongitude
       });
+
+      // Timeout to show no driver found if not accepted within 15s
+      setTimeout(() => {
+        if (!routeControl) {
+          document.getElementById("no-driver-msg").style.display = "block";
+          requestBtn.classList.remove("loading");
+          requestBtn.disabled = false;
+        }
+      }, 15000);
     });
 
-    // Optional: cleanup on disconnect
     socket.on("user-disconnected", () => {
       if (routeControl) {
         map.removeControl(routeControl);
