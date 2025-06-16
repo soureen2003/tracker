@@ -1,19 +1,113 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>User Signup</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f0f2f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      margin: 0;
+    }
+
+    .signup-container {
+      background: #fff;
+      padding: 30px 40px;
+      border-radius: 10px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.1);
+      width: 100%;
+      max-width: 450px;
+    }
+
+    h2 {
+      text-align: center;
+      margin-bottom: 25px;
+      color: #333;
+    }
+
+    form input {
+      width: 100%;
+      padding: 12px;
+      margin-bottom: 15px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      font-size: 15px;
+    }
+
+    form button {
+      width: 100%;
+      background-color: #28a745;
+      color: white;
+      padding: 12px;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      cursor: pointer;
+      transition: background-color 0.3s ease;
+    }
+
+    form button:hover {
+      background-color: #218838;
+    }
+
+    .message {
+      text-align: center;
+      margin-bottom: 15px;
+      font-size: 14px;
+    }
+
+    .message.error {
+      color: red;
+    }
+
+    .message.success {
+      color: green;
+    }
+
+    .bottom-text {
+      text-align: center;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+
+    .bottom-text a {
+      color: #007bff;
+      text-decoration: none;
+    }
+
+    .bottom-text a:hover {
+      text-decoration: underline;
+    }
+  </style>
 </head>
 <body>
-  <h2>User Signup</h2>
-  <% if (error_msg) { %><p style="color:red"><%= error_msg %></p><% } %>
-  <% if (success_msg) { %><p style="color:green"><%= success_msg %></p><% } %>
-  <form action="/user/signup" method="POST">
-    <input type="text" name="name" placeholder="Name" required /><br>
-    <input type="email" name="email" placeholder="Email" required /><br>
-    <input type="number" name="phone" placeholder="Mobile-Number" required /><br>
-    <input type="password" name="password" placeholder="Password" required /><br>
-    <button type="submit">Sign Up</button>
-  </form>
-  <p>Already have an account? <a href="/user-login">Login</a></p>
+  <div class="signup-container">
+    <h2>User Signup</h2>
+
+    <% if (error_msg) { %>
+      <div class="message error"><%= error_msg %></div>
+    <% } %>
+
+    <% if (success_msg) { %>
+      <div class="message success"><%= success_msg %></div>
+    <% } %>
+
+    <form action="/user/signup" method="POST">
+      <input type="text" name="name" placeholder="Full Name" required />
+      <input type="email" name="email" placeholder="Email Address" required />
+      <input type="number" name="phone" placeholder="Mobile Number" required />
+      <input type="password" name="password" placeholder="Password" required />
+      <button type="submit">Sign Up</button>
+    </form>
+
+    <div class="bottom-text">
+      Already have an account? <a href="/user-login">Login</a>
+    </div>
+  </div>
 </body>
 </html>
